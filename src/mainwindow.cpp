@@ -524,7 +524,7 @@ void MainWindow::onSelectionChanged()
 
 void MainWindow::onNewFromTemplate()
 {
-    // 模板就放在 ~/Gunyah/images/<name>/ 下：Image + initrd.img + rootfs.qcow2
+    // 模板就放在 ~/Gunyah/images/<name>/ 下：Image + initrd.img + 系统盘
     const QString tplRoot = QDir::homePath() + QStringLiteral("/Gunyah/images");
     const QStringList tpls =
         QDir(tplRoot).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)
@@ -536,7 +536,7 @@ void MainWindow::onNewFromTemplate()
                            "一个模板需要包含：\n"
                            "  Image        未压缩的 arm64 内核\n"
                            "  initrd.img   对应的 initramfs\n"
-                           "  rootfs.qcow2 系统盘（可选）")
+                           "  rootfs.img / rootfs.qcow2 系统盘（可选）")
                 .arg(tplRoot));
         return;
     }
@@ -569,10 +569,15 @@ void MainWindow::onNewFromTemplate()
     vm.hugepages = true;
 
     // 系统盘必须复制一份，否则所有模板实例会共写同一个镜像
-    const QString tplDisk = dir + QStringLiteral("/rootfs.qcow2");
+    // 优先 raw：实测这个 crosvm 的 qcow2 后端读 cloud image 会报
+    // "Buffer I/O error on dev vda"，raw 正常。
+    QString tplDisk = dir + QStringLiteral("/rootfs.img");
+    if (!QFile::exists(tplDisk))
+        tplDisk = dir + QStringLiteral("/rootfs.qcow2");
     if (QFile::exists(tplDisk)) {
         QDir().mkpath(Store::vmDir(name));
-        const QString newDisk = Store::vmDir(name) + QStringLiteral("/rootfs.qcow2");
+        const QString newDisk =
+            Store::vmDir(name) + QLatin1Char('/') + QFileInfo(tplDisk).fileName();
         if (!QFile::copy(tplDisk, newDisk)) {
             note(QStringLiteral("复制系统盘失败：%1").arg(newDisk), true);
             return;

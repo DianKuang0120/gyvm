@@ -102,7 +102,7 @@ Notifications (asynchronous, ordered workqueue):
 ubuntu-2404/
 ├── Image        未压缩的 arm64 内核（crosvm 不认压缩过的 vmlinuz）
 ├── initrd.img   对应的 initramfs
-└── rootfs.qcow2 系统盘
+└── rootfs.img   系统盘（raw 优先，qcow2 也行）
 ```
 
 菜单 **文件 → 从模板新建…**，选模板、填名字即可。系统盘会被**复制**一份到新 VM 目录，
@@ -116,9 +116,14 @@ ubuntu-2404/
 |---|---|
 | `Image` | cloud image 里 `/boot/vmlinuz-6.8.0-147-generic` 解压后 |
 | `initrd.img` | cloud image 里 `/boot/initrd.img-6.8.0-147-generic` |
-| `rootfs.qcow2` | 中科大 `noble-server-cloudimg-arm64.img` |
+| `rootfs.img` | 中科大 `noble-server-cloudimg-arm64.img` 转成 raw |
 
 root 密码是 `114514`，串口（`ttyS0`）自动登录。
+
+> **用 raw，不要用 qcow2**：实测这个 crosvm 的 qcow2 后端读 cloud image 时会报
+> `Buffer I/O error on dev vda, logical block 0`，然后 `UUID=... does not exist` 掉进
+> emergency shell。同样内容的 raw 镜像完全正常。
+> `qemu-img convert -O raw x.qcow2 rootfs.img` 一次就好，稀疏文件实际只占 1.8G。
 
 ### 手工从 cloud image 做一个模板
 
