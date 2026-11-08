@@ -119,6 +119,58 @@ void MainWindow::buildUi()
     m_list->setMaximumWidth(300);
     connect(m_list, &QListWidget::currentRowChanged, this, &MainWindow::onSelectionChanged);
 
+    // 右键菜单：常用操作不用再跑去工具栏
+    m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_list, &QListWidget::customContextMenuRequested, this,
+            [this](const QPoint &pos) {
+                QListWidgetItem *it = m_list->itemAt(pos);
+                if (!it)
+                    return;
+                m_list->setCurrentItem(it);
+                const QString n = it->data(Qt::UserRole).toString();
+
+                QMenu menu(this);
+                QAction *aStart = menu.addAction(QIcon::fromTheme(QStringLiteral("media-playback-start")),
+                                                 QStringLiteral("启动"));
+                QAction *aStop = menu.addAction(QIcon::fromTheme(QStringLiteral("media-playback-stop")),
+                                                QStringLiteral("停止"));
+                QAction *aRestart = menu.addAction(QIcon::fromTheme(QStringLiteral("view-refresh")),
+                                                   QStringLiteral("重启"));
+                menu.addSeparator();
+                QAction *aConsole = menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")),
+                                                   QStringLiteral("打开控制台日志"));
+                QAction *aClone = menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
+                                                 QStringLiteral("克隆虚拟机…"));
+                QAction *aTpl = menu.addAction(QIcon::fromTheme(QStringLiteral("document-save-as")),
+                                               QStringLiteral("另存为模板…"));
+                menu.addSeparator();
+                QAction *aDel = menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")),
+                                               QStringLiteral("删除虚拟机"));
+
+                const bool run = m_backend.running(n);
+                aStart->setEnabled(!run);
+                aStop->setEnabled(run);
+                aRestart->setEnabled(true);
+
+                QAction *chosen = menu.exec(m_list->mapToGlobal(pos));
+                if (!chosen)
+                    return;
+                if (chosen == aStart)
+                    onStart();
+                else if (chosen == aStop)
+                    onStop();
+                else if (chosen == aRestart)
+                    onRestart();
+                else if (chosen == aConsole)
+                    onOpenLog();
+                else if (chosen == aClone)
+                    onCloneVm();
+                else if (chosen == aTpl)
+                    onSaveAsTemplate();
+                else if (chosen == aDel)
+                    onDeleteVm();
+            });
+
     // 右侧：配置 / 控制台
     m_name = new QLineEdit(this);
     m_kernel = new QLineEdit(this);
@@ -410,6 +462,62 @@ void MainWindow::buildUi()
     connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::onSendInput);
     auto *consolePage = new QWidget(this);
     auto *pv = new QVBoxLayout(consolePage);
+
+    // 控制台工具条：搜索 / 清屏 / 导出
+    auto *cbar = new QHBoxLayout;
+    m_search = new QLineEdit(this);
+    m_search->setPlaceholderText(QStringLiteral("在控制台里搜索…"));
+    m_search->setClearButtonEnabled(true);
+    auto *btnPrev = new QPushButton(QStringLiteral("上一个"), this);
+    auto *btnNext = new QPushButton(QStringLiteral("下一个"), this);
+    auto *btnClear = new QPushButton(QStringLiteral("清屏"), this);
+    auto *btnSave = new QPushButton(QStringLiteral("导出…"), this);
+    cbar->addWidget(m_search, 1);
+    cbar->addWidget(btnPrev);
+    cbar->addWidget(btnNext);
+    cbar->addWidget(btnClear);
+    cbar->addWidget(btnSave);
+    pv->addLayout(cbar);
+
+    auto doFind = [this](bool backward) {
+        const QString t = m_search->text();
+        if (t.isEmpty())
+            return;
+        QTextDocument::FindFlags f;
+        if (backward)
+            f |= QTextDocument::FindBackward;
+        if (!m_console->find(t, f)) {
+            // 回绕到另一端再找一次
+            QTextCursor c = m_console->textCursor();
+            c.movePosition(backward ? QTextCursor::End : QTextCursor::Start);
+            m_console->setTextCursor(c);
+            if (!m_console->find(t, f))
+                note(QStringLiteral("没找到：%1").arg(t), true);
+        }
+    };
+    connect(btnPrev, &QPushButton::clicked, this, [doFind]() { doFind(true); });
+    connect(btnNext, &QPushButton::clicked, this, [doFind]() { doFind(false); });
+    connect(m_search, &QLineEdit::returnPressed, this, [doFind]() { doFind(false); });
+    // 清屏只清显示，不动已经落盘的 console.log
+    connect(btnClear, &QPushButton::clicked, this, [this]() { m_console->clear(); });
+    connect(btnSave, &QPushButton::clicked, this, [this]() {
+        const QString n = selectedName();
+        if (n.isEmpty())
+            return;
+        const QString p = QFileDialog::getSaveFileName(
+            this, QStringLiteral("导出控制台内容"), QDir::homePath() + QStringLiteral("/%1-console.txt").arg(n),
+            QStringLiteral("文本 (*.txt);;所有文件 (*)"));
+        if (p.isEmpty())
+            return;
+        QFile f(p);
+        if (!f.open(QIODevice::WriteOnly)) {
+            note(QStringLiteral("无法写入：%1").arg(p), true);
+            return;
+        }
+        f.write(m_console->toPlainText().toUtf8());
+        note(QStringLiteral("已导出到 %1").arg(p));
+    });
+
     pv->addWidget(m_console, 1);
     pv->addWidget(m_input);
 
@@ -446,6 +554,10 @@ void MainWindow::buildActions()
                                   QStringLiteral("从模板新建…"));
     mTpl->setToolTip(QStringLiteral("用 ~/Gunyah/images 里准备好的镜像快速建一台"));
     connect(mTpl, &QAction::triggered, this, &MainWindow::onNewFromTemplate);
+    auto *mSaveTpl = mFile->addAction(QIcon::fromTheme(QStringLiteral("document-save-as")),
+                                      QStringLiteral("另存为模板…"));
+    mSaveTpl->setToolTip(QStringLiteral("把当前虚拟机整理成一个可复用的模板目录"));
+    connect(mSaveTpl, &QAction::triggered, this, &MainWindow::onSaveAsTemplate);
     auto *mSave = mFile->addAction(QIcon::fromTheme(QStringLiteral("document-save")),
                                    QStringLiteral("保存配置"));
     connect(mSave, &QAction::triggered, this, &MainWindow::onSaveVm);
@@ -708,6 +820,93 @@ void MainWindow::onSelectionChanged()
 }
 
 // ---------------------------------------------------------------- 动作
+
+void MainWindow::onSaveAsTemplate()
+{
+    const QString n = selectedName();
+    if (n.isEmpty())
+        return;
+    if (!requireStopped(QStringLiteral("另存为模板")))
+        return;
+
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, QStringLiteral("另存为模板"), QStringLiteral("模板名："),
+        QLineEdit::Normal, n.toLower().replace(QLatin1Char(' '), QLatin1Char('-')), &ok)
+        .trimmed();
+    if (!ok || name.isEmpty())
+        return;
+    if (name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))) {
+        note(QStringLiteral("模板名里不能有路径分隔符"), true);
+        return;
+    }
+
+    const QString tplRoot = QDir::homePath() + QStringLiteral("/Gunyah/images");
+    const QString dir = tplRoot + QLatin1Char('/') + name;
+    if (QFile::exists(dir)) {
+        if (QMessageBox::question(this, QStringLiteral("模板已存在"),
+                                  QStringLiteral("「%1」已存在，覆盖吗？").arg(name))
+            != QMessageBox::Yes)
+            return;
+    }
+
+    if (QDir().mkpath(dir) == false) {
+        note(QStringLiteral("无法创建目录：%1").arg(dir), true);
+        return;
+    }
+
+    const VmConfig vm = Store::load(n);
+    QStringList problems;
+    int copied = 0;
+
+    auto copyInto = [&](const QString &src, const QString &dstName) -> bool {
+        if (src.isEmpty() || !QFile::exists(src))
+            return false;
+        const QString dst = dir + QLatin1Char('/') + dstName;
+        QFile::remove(dst);
+        if (!QFile::copy(src, dst)) {
+            problems << QStringLiteral("%1（复制失败）").arg(dstName);
+            return false;
+        }
+        copied++;
+        return true;
+    };
+
+    // 内核和 initrd 是模板的必需部分
+    if (!copyInto(vm.kernel, QStringLiteral("Image")))
+        problems << QStringLiteral("内核（%1）").arg(vm.kernel);
+    copyInto(vm.initrd, QStringLiteral("initrd.img"));
+
+    // 系统盘：第一个非 ISO 的磁盘当作 rootfs
+    for (const DiskAttach &d : vm.disks) {
+        if (d.cdrom)
+            continue;
+        if (copyInto(d.path, QStringLiteral("rootfs.img")))
+            break;
+    }
+
+    // 顺手写一份说明，标明生成来源
+    QFile readme(dir + QStringLiteral("/README.txt"));
+    if (readme.open(QIODevice::WriteOnly)) {
+        readme.write(QStringLiteral("由 gyvm 从「%1」导出\n"
+                                    "kernel:   %2\n"
+                                    "initrd:   %3\n"
+                                    "cmdline:  root=%4 %5\n")
+                         .arg(n, vm.kernel, vm.initrd, vm.rootDevice, vm.extraCmdline)
+                         .toUtf8());
+        readme.close();
+    }
+
+    if (copied == 0) {
+        note(QStringLiteral("没有可复制的镜像，模板为空"), true);
+        return;
+    }
+    if (problems.isEmpty())
+        note(QStringLiteral("已导出模板「%1」→ %2").arg(name, dir));
+    else
+        note(QStringLiteral("已导出模板「%1」，但：%2").arg(name, problems.join(QStringLiteral("；"))),
+             true);
+}
 
 void MainWindow::onNewFromTemplate()
 {

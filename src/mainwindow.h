@@ -27,6 +27,7 @@ public:
 private slots:
     void onNewVm();
     void onNewFromTemplate();
+    void onSaveAsTemplate();
     void onSaveVm();
     void onDeleteVm();
     void onStart();
@@ -105,6 +106,7 @@ private:
     QCheckBox *m_pstore = nullptr;
     QPlainTextEdit *m_console = nullptr;
     QLineEdit *m_input = nullptr;
+    QLineEdit *m_search = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_statsLabel = nullptr;
     QLabel *m_memHint = nullptr;
