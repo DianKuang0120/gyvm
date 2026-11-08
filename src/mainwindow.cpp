@@ -958,20 +958,30 @@ void MainWindow::onStart()
     if (vm.memoryMiB > 1024) {
         QFile f(QStringLiteral("/sys/kernel/mm/transparent_hugepage/shmem_enabled"));
         if (f.open(QIODevice::ReadOnly)) {
+            // sysfs 用方括号标出生效值，形如：
+            //   always within_size [advise] never deny force
+            // 所以不能拿 startsWith 去比，必须先把方括号里的词取出来。
             const QString mode = QString::fromLatin1(f.read(64)).trimmed();
-            const bool usable = mode.startsWith(QStringLiteral("[advise]")) ||
-                                mode.startsWith(QStringLiteral("[always]")) ||
-                                mode.startsWith(QStringLiteral("[within_size]"));
+            const int lb = mode.indexOf(QLatin1Char('['));
+            const int rb = mode.indexOf(QLatin1Char(']'));
+            QString active;
+            if (lb >= 0 && rb > lb)
+                active = mode.mid(lb + 1, rb - lb - 1);
+
+            const bool usable = active == QLatin1String("advise") ||
+                                active == QLatin1String("always") ||
+                                active == QLatin1String("within_size");
             if (!usable) {
                 const auto r = QMessageBox::question(
                     this, QStringLiteral("shmem 大页被禁用"),
                     QStringLiteral(
-                        "客户机内存 %1 MiB，但 shmem 大页当前是：\n"
-                        "  %2\n\n"
+                        "客户机内存 %1 MiB，但 shmem 大页当前生效值是：\n"
+                        "  %2\n  （完整内容：%3）\n\n"
                         "never/deny 时无法为大内存客户机建立 memfd，\n"
                         "资源管理器会用 GH_RM_ERROR_NORESOURCE 拒绝 VM_START。\n\n"
                         "改成 advise 吗？（只影响主动请求大页的进程，需要授权）")
                         .arg(vm.memoryMiB)
+                        .arg(active.isEmpty() ? QStringLiteral("(无法识别)") : active)
                         .arg(mode));
                 if (r == QMessageBox::Yes)
                     m_backend.setShmemThp(QStringLiteral("advise"));
