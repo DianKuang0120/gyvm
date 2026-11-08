@@ -134,10 +134,24 @@ void MainWindow::buildUi()
     connect(m_mem, &QSpinBox::valueChanged, this, [this](int) { updateMemHint(); });
     updateMemHint();
 
+    auto *cmdlineRow = new QWidget(this);
+    auto *cl = new QHBoxLayout(cmdlineRow);
+    cl->setContentsMargins(0, 0, 0, 0);
+    m_rootDevice = new QLineEdit(this);
+    m_rootDevice->setPlaceholderText(QStringLiteral("UUID=xxxx 或 /dev/vda1（留空则不加 root=）"));
+    m_extraCmdline = new QLineEdit(this);
+    m_extraCmdline->setPlaceholderText(QStringLiteral("例如 systemd.mask=systemd-networkd-wait-online.service"));
+    cl->addWidget(new QLabel(QStringLiteral("root="), this));
+    cl->addWidget(m_rootDevice, 2);
+    cl->addSpacing(8);
+    cl->addWidget(new QLabel(QStringLiteral("附加"), this));
+    cl->addWidget(m_extraCmdline, 3);
+
     auto *form = new QFormLayout;
     form->addRow(QStringLiteral("名称"), m_name);
     form->addRow(QStringLiteral("内核 Image"), kernelRow);
     form->addRow(QStringLiteral("initramfs"), initrdRow);
+    form->addRow(QStringLiteral("内核命令行"), cmdlineRow);
     form->addRow(QStringLiteral("内存"), memRow);
     form->addRow(QStringLiteral("CPU"), m_cpus);
 
@@ -225,6 +239,23 @@ void MainWindow::buildUi()
 
     m_pstore = new QCheckBox(QStringLiteral("保留客户机内核日志（--pstore）"), this);
     dv->addWidget(m_pstore);
+
+    // 高级：直接追加 crosvm 参数（一行一个），用来试新开关或本程序还没覆盖的选项
+    auto *adv = new QGroupBox(QStringLiteral("高级：追加 crosvm 参数"), this);
+    adv->setCheckable(true);
+    adv->setChecked(false); // 默认收起，避免占地方
+    auto *av = new QVBoxLayout(adv);
+    m_extraArgs = new QPlainTextEdit(this);
+    m_extraArgs->setPlaceholderText(
+        QStringLiteral("一行一个，原样追加到 crosvm 命令行末尾（内核路径之前）\n"
+                       "例如：\n"
+                       "  --vsock cid=3\n"
+                       "  --input keyboard\n"
+                       "  --async-executor uring"));
+    m_extraArgs->setMaximumHeight(90);
+    m_extraArgs->setStyleSheet(QStringLiteral("font-family: monospace;"));
+    av->addWidget(m_extraArgs);
+    dv->addWidget(adv);
 
     auto *configPage = new QWidget(this);
     auto *cv = new QVBoxLayout(configPage);
@@ -450,6 +481,12 @@ void MainWindow::loadForm(const VmConfig &vm)
         it->setData(Qt::UserRole + 1, d.cdrom);
         it->setData(Qt::UserRole + 2, d.path);
     }
+    if (m_rootDevice)
+        m_rootDevice->setText(vm.rootDevice);
+    if (m_extraCmdline)
+        m_extraCmdline->setText(vm.extraCmdline);
+    if (m_extraArgs)
+        m_extraArgs->setPlainText(vm.extraArgs.join(QLatin1Char('\n')));
     if (m_pflash)
         m_pflash->setText(vm.pflash);
     if (m_pstore)
@@ -480,8 +517,15 @@ VmConfig MainWindow::formConfig(bool forSave) const
     vm.gpu = m_gpu->isChecked();
     vm.net = m_net->isChecked();
     vm.tapName = m_tap->text().trimmed();
-    if (forSave && Store::exists(vm.name))
-        vm.extraArgs = Store::load(vm.name).extraArgs;
+    if (m_extraArgs) {
+        const QStringList lines =
+            m_extraArgs->toPlainText().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        for (const QString &l : lines)
+            if (!l.trimmed().isEmpty())
+                vm.extraArgs << l.trimmed();
+    }
+    vm.rootDevice = m_rootDevice ? m_rootDevice->text().trimmed() : QString();
+    vm.extraCmdline = m_extraCmdline ? m_extraCmdline->text().trimmed() : QString();
     vm.pflash = m_pflash ? m_pflash->text().trimmed() : QString();
     vm.pstore = m_pstore && m_pstore->isChecked();
     for (int i = 0; i < m_disks->count(); ++i) {
@@ -567,6 +611,11 @@ void MainWindow::onNewFromTemplate()
     vm.cpus = 2;
     vm.protectedVm = true;
     vm.hugepages = true;
+    // Ubuntu cloud image 的根分区 UUID，外加没有网卡时跳过 networkd 等待
+    if (tpl.startsWith(QLatin1String("ubuntu"))) {
+        vm.rootDevice = QStringLiteral("UUID=da3ec87b-3550-4f39-ab67-09f9e985ca0d");
+        vm.extraCmdline = QStringLiteral("rw systemd.mask=systemd-networkd-wait-online.service");
+    }
 
     // 系统盘必须复制一份，否则所有模板实例会共写同一个镜像
     // 优先 raw：实测这个 crosvm 的 qcow2 后端读 cloud image 会报

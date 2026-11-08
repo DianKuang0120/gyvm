@@ -39,6 +39,8 @@ struct VmConfig {
     bool pstore = false;     // --pstore：客户机内核日志跨重启保留
     QList<DiskAttach> disks;
     QList<SharedDir> sharedDirs; // virtio-fs
+    QString rootDevice;      // 内核 root= 参数，例如 UUID=xxxx 或 /dev/vda1
+    QString extraCmdline;    // 追加到内核命令行的额外参数（可在界面编辑）
     QStringList extraArgs;   // 追加到 crosvm 后的额外参数
 
     QJsonObject toJson() const
@@ -76,6 +78,8 @@ struct VmConfig {
             sd.append(j);
         }
         o["sharedDirs"] = sd;
+        o["rootDevice"] = rootDevice;
+        o["extraCmdline"] = extraCmdline;
         o["extraArgs"] = QJsonArray::fromStringList(extraArgs);
         return o;
     }
@@ -115,6 +119,8 @@ struct VmConfig {
             s.readOnly = j.value("readonly").toBool(false);
             v.sharedDirs.append(s);
         }
+        v.rootDevice = o.value("rootDevice").toString();
+        v.extraCmdline = o.value("extraCmdline").toString();
         v.extraArgs = o.value("extraArgs").toVariant().toStringList();
         return v;
     }

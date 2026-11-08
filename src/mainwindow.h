@@ -12,6 +12,7 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
+class QGroupBox;
 class QSpinBox;
 class QTimer;
 
@@ -84,6 +85,9 @@ private:
     QLineEdit *m_tap = nullptr;
     QListWidget *m_disks = nullptr;
     QListWidget *m_sharedDirs = nullptr;
+    QLineEdit *m_rootDevice = nullptr;
+    QLineEdit *m_extraCmdline = nullptr;
+    QPlainTextEdit *m_extraArgs = nullptr;
     QLineEdit *m_pflash = nullptr;
     QCheckBox *m_pstore = nullptr;
     QPlainTextEdit *m_console = nullptr;

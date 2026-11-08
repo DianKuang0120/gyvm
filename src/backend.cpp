@@ -111,9 +111,21 @@ QStringList Backend::buildArgs(const VmConfig &vm, const QString &rwFlag)
         a << QStringLiteral("--net") << (QStringLiteral("tap-name=") + tap);
     }
 
+    // 内核命令行：默认串口控制台 + 不 panic，用户可在「内核命令行」里追加
+    QString cmdline = QStringLiteral("console=tty0 console=ttyS0 panic=0");
+    if (!vm.rootDevice.isEmpty()) {
+        // 允许用户直接填 UUID=... 或 /dev/vda1，也允许填完整的 "root=..."
+        if (vm.rootDevice.startsWith(QLatin1String("root=")))
+            cmdline += QLatin1Char(' ') + vm.rootDevice;
+        else
+            cmdline += QStringLiteral(" root=") + vm.rootDevice;
+    }
+    if (!vm.extraCmdline.trimmed().isEmpty())
+        cmdline += QLatin1Char(' ') + vm.extraCmdline.trimmed();
+
     a << QStringLiteral("--serial")
       << QStringLiteral("type=stdout,hardware=serial,console=true,stdin=true")
-      << QStringLiteral("--params") << QStringLiteral("console=tty0 console=ttyS0 panic=0");
+      << QStringLiteral("--params") << cmdline;
 
     if (!vm.initrd.isEmpty())
         a << QStringLiteral("--initrd") << vm.initrd;
