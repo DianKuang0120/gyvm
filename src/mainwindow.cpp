@@ -4,6 +4,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -191,6 +192,101 @@ void MainWindow::buildUi()
     dv->addWidget(m_protected);
     dv->addWidget(m_huge);
     dv->addWidget(m_gpu);
+
+    // 图形窗口：分辨率。crosvm 这个版本的 --gpu 只实现 windowed[W,H]，
+    // 文档里的 borderless_full_screen 会报 unknown variant，
+    // 所以「全屏」就是把窗口尺寸设成屏幕尺寸。
+    auto *gpuRow = new QWidget(this);
+    auto *gl = new QHBoxLayout(gpuRow);
+    gl->setContentsMargins(0, 0, 0, 0);
+
+    m_gpuPreset = new QComboBox(this);
+    m_gpuPreset->setEditable(true);           // 允许直接输入 "宽x高"
+    m_gpuPreset->setInsertPolicy(QComboBox::NoInsert);
+    m_gpuPreset->setMinimumWidth(150);
+    m_gpuPreset->lineEdit()->setPlaceholderText(QStringLiteral("自定义，如 1600x900"));
+    const QList<QPair<QString, QSize>> presets = {
+        {QStringLiteral("800×600"),   {800, 600}},
+        {QStringLiteral("1024×768"),  {1024, 768}},
+        {QStringLiteral("1280×720"),  {1280, 720}},
+        {QStringLiteral("1280×800"),  {1280, 800}},
+        {QStringLiteral("1440×900"),  {1440, 900}},
+        {QStringLiteral("1600×900"),  {1600, 900}},
+        {QStringLiteral("1920×1080"), {1920, 1080}},
+        {QStringLiteral("2560×1440"), {2560, 1440}},
+    };
+    for (const auto &p : presets)
+        m_gpuPreset->addItem(p.first, QSize(p.second));
+
+    m_gpuW = new QSpinBox(this);
+    m_gpuW->setRange(320, 7680);
+    m_gpuW->setValue(1280);
+    m_gpuW->setSuffix(QStringLiteral(" px"));
+    m_gpuH = new QSpinBox(this);
+    m_gpuH->setRange(200, 4320);
+    m_gpuH->setValue(720);
+    m_gpuH->setSuffix(QStringLiteral(" px"));
+
+    auto *fitBtn = new QPushButton(QStringLiteral("铺满屏幕"), this);
+    fitBtn->setToolTip(QStringLiteral("把窗口尺寸设成当前屏幕大小"));
+
+    // 预设 → 宽高
+    connect(m_gpuPreset, &QComboBox::activated, this, [this](int idx) {
+        const QSize sz = m_gpuPreset->itemData(idx).toSize();
+        if (sz.isValid()) {
+            m_gpuW->setValue(sz.width());
+            m_gpuH->setValue(sz.height());
+        }
+    });
+    // 手动输入 "1600x900" 或 "1600×900"
+    connect(m_gpuPreset->lineEdit(), &QLineEdit::editingFinished, this, [this]() {
+        QString t = m_gpuPreset->currentText().trimmed();
+        t.replace(QChar(0x00d7), QLatin1Char('x'));   // ×
+        t.replace(QLatin1Char('*'), QLatin1Char('x'));
+        const QStringList parts = t.split(QLatin1Char('x'), Qt::SkipEmptyParts);
+        if (parts.size() == 2) {
+            bool ok1 = false, ok2 = false;
+            const int w = parts.at(0).trimmed().toInt(&ok1);
+            const int h = parts.at(1).trimmed().toInt(&ok2);
+            if (ok1 && ok2 && w >= 320 && h >= 200) {
+                m_gpuW->setValue(w);
+                m_gpuH->setValue(h);
+            }
+        }
+    });
+    // 宽高被改时，把预设框同步成当前值（不触发预设回调）
+    auto syncPresetText = [this]() {
+        const QString t = QStringLiteral("%1×%2").arg(m_gpuW->value()).arg(m_gpuH->value());
+        if (m_gpuPreset->currentText() != t)
+            m_gpuPreset->setEditText(t);
+    };
+    connect(m_gpuW, &QSpinBox::valueChanged, this, syncPresetText);
+    connect(m_gpuH, &QSpinBox::valueChanged, this, syncPresetText);
+
+    connect(fitBtn, &QPushButton::clicked, this, [this]() {
+        if (const QScreen *sc = QGuiApplication::primaryScreen()) {
+            const QSize sz = sc->geometry().size();
+            m_gpuW->setValue(sz.width());
+            m_gpuH->setValue(sz.height());
+        }
+    });
+
+    gl->addWidget(m_gpuPreset);
+    gl->addWidget(new QLabel(QStringLiteral("或"), this));
+    gl->addWidget(m_gpuW);
+    gl->addWidget(new QLabel(QStringLiteral("×"), this));
+    gl->addWidget(m_gpuH);
+    gl->addWidget(fitBtn);
+    dv->addWidget(gpuRow);
+
+    auto syncGpu = [this]() {
+        const bool on = m_gpu->isChecked();
+        m_gpuPreset->setEnabled(on);
+        m_gpuW->setEnabled(on);
+        m_gpuH->setEnabled(on);
+    };
+    connect(m_gpu, &QCheckBox::toggled, this, syncGpu);
+    syncGpu();
     auto *netRow = new QWidget(this);
     auto *nl = new QHBoxLayout(netRow);
     nl->setContentsMargins(0, 0, 0, 0);
@@ -467,6 +563,13 @@ void MainWindow::loadForm(const VmConfig &vm)
     m_protected->setChecked(vm.protectedVm);
     m_huge->setChecked(vm.hugepages);
     m_gpu->setChecked(vm.gpu);
+    if (m_gpuW)
+        m_gpuW->setValue(vm.gpuWidth);
+    if (m_gpuH)
+        m_gpuH->setValue(vm.gpuHeight);
+    if (m_gpuPreset)
+        m_gpuPreset->setEditText(
+            QStringLiteral("%1×%2").arg(vm.gpuWidth).arg(vm.gpuHeight));
     m_net->setChecked(vm.net);
     m_tap->setText(vm.tapName);
     m_disks->clear();
@@ -515,6 +618,10 @@ VmConfig MainWindow::formConfig(bool forSave) const
     vm.protectedVm = m_protected->isChecked();
     vm.hugepages = m_huge->isChecked();
     vm.gpu = m_gpu->isChecked();
+    if (m_gpuW)
+        vm.gpuWidth = m_gpuW->value();
+    if (m_gpuH)
+        vm.gpuHeight = m_gpuH->value();
     vm.net = m_net->isChecked();
     vm.tapName = m_tap->text().trimmed();
     if (m_extraArgs) {

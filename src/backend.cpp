@@ -213,6 +213,9 @@ QStringList Backend::buildArgs(const VmConfig &vm, const QString &rwFlag)
         a << QStringLiteral("--hugepages");
 
     if (vm.gpu) {
+        // 这个 crosvm 的 --gpu 只实现 windowed 模式（文档里写的
+        // borderless_full_screen 实际会报 unknown variant），所以「全屏」
+        // 靠把窗口尺寸设成屏幕尺寸来实现。
         a << QStringLiteral("--gpu")
           << QStringLiteral("backend=2d,displays=[[mode=windowed[%1,%2]]]")
                  .arg(vm.gpuWidth)

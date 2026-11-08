@@ -8,6 +8,7 @@
 
 class QAction;
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -81,6 +82,10 @@ private:
     QCheckBox *m_protected = nullptr;
     QCheckBox *m_huge = nullptr;
     QCheckBox *m_gpu = nullptr;
+    QCheckBox *m_gpuFullscreen = nullptr;
+    QComboBox *m_gpuPreset = nullptr;
+    QSpinBox *m_gpuW = nullptr;
+    QSpinBox *m_gpuH = nullptr;
     QCheckBox *m_net = nullptr;
     QLineEdit *m_tap = nullptr;
     QListWidget *m_disks = nullptr;

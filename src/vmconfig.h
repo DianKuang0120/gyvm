@@ -35,6 +35,7 @@ struct VmConfig {
     bool gpu = false;        // virtio-gpu 独立窗口
     int gpuWidth = 1280;
     int gpuHeight = 720;
+    bool gpuFullscreen = false; // 无边框全屏（mode=borderless_full_screen）
     QString pflash;          // UEFI 变量存储（--pflash）；UEFI 启动用
     bool pstore = false;     // --pstore：客户机内核日志跨重启保留
     QList<DiskAttach> disks;
@@ -58,6 +59,7 @@ struct VmConfig {
         o["gpu"] = gpu;
         o["gpuWidth"] = gpuWidth;
         o["gpuHeight"] = gpuHeight;
+        o["gpuFullscreen"] = gpuFullscreen;
         o["pflash"] = pflash;
         o["pstore"] = pstore;
         QJsonArray ds;
@@ -99,6 +101,7 @@ struct VmConfig {
         v.gpu = o.value("gpu").toBool(false);
         v.gpuWidth = o.value("gpuWidth").toInt(1280);
         v.gpuHeight = o.value("gpuHeight").toInt(720);
+        v.gpuFullscreen = o.value("gpuFullscreen").toBool(false);
         v.pflash = o.value("pflash").toString();
         v.pstore = o.value("pstore").toBool(false);
         const QJsonArray ds = o.value("disks").toArray();
