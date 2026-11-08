@@ -58,6 +58,11 @@ public:
     bool daemonAvailable() const;
     bool setShmemThp(const QString &mode); // 经 daemon 写 shmem 大页
 
+    // 网络：经 daemon 建 tap + 配 NAT；返回空串表示成功
+    QString setupNetwork(const QString &tap, const QString &subnet, const QString &uplink);
+    void teardownNetwork(const QString &tap, const QString &subnet, const QString &uplink);
+    QString defaultUplink() const;
+
     bool running(const QString &name) const;
     bool start(const VmConfig &vm, QString *err);
     void stop(const QString &name);

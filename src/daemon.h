@@ -30,6 +30,17 @@ public slots:
     // 打开/关闭 shmem 大页（内存 >1G 的 VM 必需）
     bool SetShmemThp(const QString &mode); // never / advise / always
 
+    // 网络：建 tap + 配 NAT，让客户机经宿主上网。
+    // 返回空串表示成功，否则是错误说明。
+    QString SetupNetwork(const QString &tap, const QString &subnet,
+                         const QString &uplink);
+    // 拆除：删 tap、撤销 NAT 规则
+    void TeardownNetwork(const QString &tap, const QString &subnet,
+                         const QString &uplink);
+    // 探测可用的出口接口（默认路由所在）
+    QString DefaultUplink() const;
+    bool NetworkReady(const QString &tap) const;
+
     QString CrosvmPath() const;
     QString Version() const;
 

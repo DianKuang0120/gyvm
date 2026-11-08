@@ -1042,6 +1042,29 @@ void MainWindow::onStart()
         note(QStringLiteral("保存配置失败"), true);
         return;
     }
+    // 网络：先让 daemon 把 tap 和 NAT 准备好，否则 crosvm 会因为
+    // tap 不存在或没权限直接失败
+    if (vm.net) {
+        const QString tap = vm.tapName.isEmpty() ? QStringLiteral("gyvm0") : vm.tapName;
+        const QString subnet = QStringLiteral("192.168.77.0/24");
+        const QString uplink = m_backend.defaultUplink();
+        const QString nerr = m_backend.setupNetwork(tap, subnet, uplink);
+        if (!nerr.isEmpty()) {
+            note(QStringLiteral("网络配置失败：%1").arg(nerr), true);
+            QMessageBox::warning(this, QStringLiteral("网络配置失败"),
+                                 QStringLiteral("%1\n\n"
+                                                "没有 daemon 时，请先手动建 tap：\n"
+                                                "  sudo ip tuntap add dev %2 mode tap\n"
+                                                "  sudo ip addr add 192.168.77.1/24 dev %2\n"
+                                                "  sudo ip link set %2 up\n"
+                                                "  sudo sysctl -w net.ipv4.ip_forward=1\n"
+                                                "  sudo iptables -t nat -A POSTROUTING -s 192.168.77.0/24 -o <出口> -j MASQUERADE")
+                                     .arg(nerr, tap));
+            return;
+        }
+        note(QStringLiteral("网络就绪：%1 → %2").arg(tap, uplink.isEmpty() ? QStringLiteral("?") : uplink));
+    }
+
     QString err;
     if (!m_backend.start(vm, &err))
         note(QStringLiteral("启动失败：%1").arg(err), true);

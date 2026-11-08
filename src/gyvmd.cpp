@@ -6,8 +6,10 @@
 #include <QDBusError>
 #include <QFile>
 #include <QLoggingCategory>
+#include <QPair>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
 
 Daemon::Daemon(QObject *parent) : QObject(parent)
 {
@@ -123,6 +125,154 @@ bool Daemon::SetShmemThp(const QString &mode)
     if (f.write(mode.toLatin1()) < 0)
         return false;
     return true;
+}
+
+// 跑一条命令，返回 {成功, 输出}
+static QPair<bool, QString> run(const QString &prog, const QStringList &args)
+{
+    QProcess p;
+    p.start(prog, args);
+    if (!p.waitForFinished(15000))
+        return {false, QStringLiteral("超时：%1 %2").arg(prog, args.join(QLatin1Char(' ')))};
+    const QString err = QString::fromLocal8Bit(p.readAllStandardError()).trimmed();
+    const bool ok = p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
+    return {ok, ok ? QString() : err};
+}
+
+QString Daemon::DefaultUplink() const
+{
+    // 默认路由所在接口就是出口
+    QProcess p;
+    p.start(QStringLiteral("ip"), {QStringLiteral("-4"), QStringLiteral("route"),
+                                   QStringLiteral("show"), QStringLiteral("default")});
+    if (p.waitForFinished(5000)) {
+        const QString out = QString::fromLocal8Bit(p.readAllStandardOutput());
+        for (const QString &line : out.split(QLatin1Char('\n')))
+            if (line.startsWith(QLatin1String("default"))) {
+                const QStringList f = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                const int i = f.indexOf(QStringLiteral("dev"));
+                if (i >= 0 && i + 1 < f.size())
+                    return f.at(i + 1);
+            }
+    }
+    return {};
+}
+
+bool Daemon::NetworkReady(const QString &tap) const
+{
+    if (tap.isEmpty())
+        return false;
+    QProcess p;
+    p.start(QStringLiteral("ip"), {QStringLiteral("link"), QStringLiteral("show"),
+                                   QStringLiteral("dev"), tap});
+    if (!p.waitForFinished(5000) || p.exitCode() != 0)
+        return false;
+    return QString::fromLocal8Bit(p.readAllStandardOutput())
+        .contains(QLatin1String("state UP"));
+}
+
+QString Daemon::SetupNetwork(const QString &tap, const QString &subnet,
+                             const QString &uplink)
+{
+    if (tap.isEmpty() || !tap.contains(QRegularExpression(QStringLiteral("^[a-zA-Z0-9_.-]{1,15}$"))))
+        return QStringLiteral("接口名不合法：%1").arg(tap);
+
+    // subnet 形如 192.168.77.0/24，我们从中取出网关地址（.1）
+    const QStringList parts = subnet.split(QLatin1Char('/'));
+    if (parts.size() != 2)
+        return QStringLiteral("子网格式不对：%1").arg(subnet);
+    const QString addr = parts.at(0);
+    const int prefix = parts.at(1).toInt();
+    if (prefix < 16 || prefix > 29)
+        return QStringLiteral("前缀长度不合理：%1").arg(prefix);
+    const int slash = addr.lastIndexOf(QLatin1Char('.'));
+    if (slash < 0)
+        return QStringLiteral("子网地址不合法：%1").arg(subnet);
+    const QString gateway = addr.left(slash) + QStringLiteral(".1");
+
+    const QString up = uplink.isEmpty() ? DefaultUplink() : uplink;
+
+    // 1) tap 不存在才建；已存在就直接用
+    if (!QFile::exists(QStringLiteral("/sys/class/net/") + tap)) {
+        auto r = run(QStringLiteral("ip"),
+                     {QStringLiteral("tuntap"), QStringLiteral("add"),
+                      QStringLiteral("dev"), tap, QStringLiteral("mode"),
+                      QStringLiteral("tap")});
+        if (!r.first)
+            return QStringLiteral("创建 tap 失败：%1").arg(r.second);
+    }
+
+    // 2) 配地址和 up
+    run(QStringLiteral("ip"), {QStringLiteral("addr"), QStringLiteral("flush"),
+                               QStringLiteral("dev"), tap});
+    auto r = run(QStringLiteral("ip"),
+                 {QStringLiteral("addr"), QStringLiteral("add"),
+                  QStringLiteral("%1/%2").arg(gateway).arg(prefix),
+                  QStringLiteral("dev"), tap});
+    if (!r.first)
+        return QStringLiteral("配地址失败：%1").arg(r.second);
+    r = run(QStringLiteral("ip"),
+            {QStringLiteral("link"), QStringLiteral("set"), QStringLiteral("dev"),
+             tap, QStringLiteral("up")});
+    if (!r.first)
+        return QStringLiteral("启用 tap 失败：%1").arg(r.second);
+
+    // 3) 开转发
+    QFile fwd(QStringLiteral("/proc/sys/net/ipv4/ip_forward"));
+    if (fwd.open(QIODevice::WriteOnly)) {
+        fwd.write("1");
+        fwd.close();
+    }
+
+    if (up.isEmpty())
+        return QStringLiteral("找不到默认路由所在的出口接口，无法配 NAT");
+
+    // 4) NAT。priority 固定，便于重复添加时替换而不是叠加
+    const QString prio = QStringLiteral("100");
+    QProcess del;
+    del.start(QStringLiteral("iptables"),
+              {QStringLiteral("-t"), QStringLiteral("nat"), QStringLiteral("-D"),
+               QStringLiteral("POSTROUTING"), QStringLiteral("-s"), subnet,
+               QStringLiteral("-o"), up, QStringLiteral("-j"), QStringLiteral("MASQUERADE")});
+    del.waitForFinished(5000);
+
+    r = run(QStringLiteral("iptables"),
+            {QStringLiteral("-t"), QStringLiteral("nat"), QStringLiteral("-A"),
+             QStringLiteral("POSTROUTING"), QStringLiteral("-s"), subnet,
+             QStringLiteral("-o"), up, QStringLiteral("-j"), QStringLiteral("MASQUERADE")});
+    if (!r.first) {
+        // iptables 不可用时退回 nft
+        QProcess nd;
+        nd.start(QStringLiteral("nft"),
+                 {QStringLiteral("add"), QStringLiteral("rule"),
+                  QStringLiteral("ip"), QStringLiteral("nat"), QStringLiteral("postrouting"),
+                  QStringLiteral("ip"), QStringLiteral("saddr"), subnet,
+                  QStringLiteral("oifname"), QStringLiteral("\"%1\"").arg(up),
+                  QStringLiteral("masquerade")});
+        nd.waitForFinished(8000);
+        if (nd.exitCode() != 0)
+            return QStringLiteral("配 NAT 失败：iptables 和 nft 都不可用");
+    }
+
+    qInfo("gyvmd: 网络就绪 tap=%s 网关=%s 出口=%s",
+          qUtf8Printable(tap), qUtf8Printable(gateway), qUtf8Printable(up));
+    return {};
+}
+
+void Daemon::TeardownNetwork(const QString &tap, const QString &subnet,
+                             const QString &uplink)
+{
+    if (tap.isEmpty())
+        return;
+    const QString up = uplink.isEmpty() ? DefaultUplink() : uplink;
+    if (!up.isEmpty())
+        run(QStringLiteral("iptables"),
+            {QStringLiteral("-t"), QStringLiteral("nat"), QStringLiteral("-D"),
+             QStringLiteral("POSTROUTING"), QStringLiteral("-s"), subnet,
+             QStringLiteral("-o"), up, QStringLiteral("-j"), QStringLiteral("MASQUERADE")});
+    run(QStringLiteral("ip"),
+        {QStringLiteral("link"), QStringLiteral("del"), QStringLiteral("dev"), tap});
+    qInfo("gyvmd: 网络已拆除 tap=%s", qUtf8Printable(tap));
 }
 
 int main(int argc, char **argv)

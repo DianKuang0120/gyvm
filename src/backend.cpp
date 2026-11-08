@@ -44,6 +44,32 @@ bool Backend::setShmemThp(const QString &mode)
     return rep.isValid() && rep.value();
 }
 
+QString Backend::setupNetwork(const QString &tap, const QString &subnet, const QString &uplink)
+{
+    if (!m_daemon)
+        return QStringLiteral("需要特权 daemon（gyvmd）才能配置网络");
+    QDBusReply<QString> rep =
+        m_daemon->call(QStringLiteral("SetupNetwork"), tap, subnet, uplink);
+    if (!rep.isValid())
+        return rep.error().message();
+    return rep.value();
+}
+
+void Backend::teardownNetwork(const QString &tap, const QString &subnet, const QString &uplink)
+{
+    if (!m_daemon)
+        return;
+    m_daemon->call(QStringLiteral("TeardownNetwork"), tap, subnet, uplink);
+}
+
+QString Backend::defaultUplink() const
+{
+    if (!m_daemon)
+        return {};
+    QDBusReply<QString> rep = m_daemon->call(QStringLiteral("DefaultUplink"));
+    return rep.isValid() ? rep.value() : QString();
+}
+
 void Backend::onDaemonOutput(const QString &name, const QByteArray &data)
 {
     emit output(name, data);

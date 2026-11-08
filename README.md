@@ -37,8 +37,8 @@
 | **克隆虚拟机**（可选一并复制磁盘和 UEFI 变量，避免两台共写同一镜像） | ✅ 新增 |
 | **Gunyah 驱动状态窗口**（GUI 内直接读 `/sys/kernel/debug/gunyah`，看内存/资源/RPC 延迟） | ✅ 新增 |
 | **打开控制台日志**（一键用系统默认程序打开 `console.log`） | ✅ 新增 |
-| 网络：virtio-net（tap） | 🟡 参数已接，**本机会导致 crosvm 卡死**，暂缓 |
-| 宿主 tap/IP 转发自动配置（提权） | ⬜ TODO |
+| **网络（virtio-net + tap + NAT）**：daemon 自动建 tap、配地址、开转发、加 NAT | ✅ |
+| 客户的静态 IP 配置（netplan 模板已内置） | ✅ |
 | 快照 / 模板 / i18n / 控制台终端仿真 | ⬜ TODO |
 
 ### 新增功能说明
@@ -93,6 +93,40 @@ Notifications (asynchronous, ordered workqueue):
 
 点「刷新」重新读取。VM 卡住时不必再开终端敲命令。
 
+
+## 网络
+
+勾选「网络」后，启动前 gyvm 会通过 daemon 自动完成：
+
+```bash
+ip tuntap add dev gyvm0 mode tap
+ip addr add 192.168.77.1/24 dev gyvm0
+ip link set gyvm0 up
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -A POSTROUTING -s 192.168.77.0/24 -o <默认路由出口> -j MASQUERADE
+```
+
+出口接口由 daemon 从 `ip route show default` 自动探测（本机是 `wlan0`）。
+
+客户机侧用静态地址（模板里已配好 `/etc/netplan/50-gyvm.yaml`）：
+
+```
+地址    192.168.77.2/24
+网关    192.168.77.1
+DNS     223.5.5.5, 119.29.29.29
+```
+
+进去后验证：
+
+```bash
+ip a                      # eth0 应该是 192.168.77.2
+ping -c2 192.168.77.1     # 通宿主
+ping -c2 223.5.5.5        # 通外网
+```
+
+没有 daemon 时，按弹窗里给出的命令手工配一遍即可。
+
+> 早期版本因为 tap 未创建导致 crosvm 直接退出，现在启动前会检查并给出明确提示。
 
 ## 用模板一键建 Ubuntu（推荐）
 
