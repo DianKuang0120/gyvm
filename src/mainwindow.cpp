@@ -1051,15 +1051,18 @@ void MainWindow::onStart()
         const QString nerr = m_backend.setupNetwork(tap, subnet, uplink);
         if (!nerr.isEmpty()) {
             note(QStringLiteral("网络配置失败：%1").arg(nerr), true);
-            QMessageBox::warning(this, QStringLiteral("网络配置失败"),
-                                 QStringLiteral("%1\n\n"
-                                                "没有 daemon 时，请先手动建 tap：\n"
-                                                "  sudo ip tuntap add dev %2 mode tap\n"
-                                                "  sudo ip addr add 192.168.77.1/24 dev %2\n"
-                                                "  sudo ip link set %2 up\n"
-                                                "  sudo sysctl -w net.ipv4.ip_forward=1\n"
-                                                "  sudo iptables -t nat -A POSTROUTING -s 192.168.77.0/24 -o <出口> -j MASQUERADE")
-                                     .arg(nerr, tap));
+            QMessageBox::warning(
+                this, QStringLiteral("网络配置失败"),
+                QStringLiteral(
+                    "%1\n\n"
+                    "已尝试用提权前缀（设置 → 首选项里的「提权前缀」，默认 sudo -A）执行：\n"
+                    "  ip tuntap add dev %2 mode tap\n"
+                    "  ip addr add 192.168.77.1/24 dev %2\n"
+                    "  ip link set %2 up\n"
+                    "  sysctl -w net.ipv4.ip_forward=1\n"
+                    "  iptables -t nat -A POSTROUTING -s 192.168.77.0/24 -o <出口> -j MASQUERADE\n\n"
+                    "可以手工执行上面几条，或在终端里直接跑本程序（有 TTY 时 sudo 会问密码）。")
+                    .arg(nerr, tap));
             return;
         }
         note(QStringLiteral("网络就绪：%1 → %2").arg(tap, uplink.isEmpty() ? QStringLiteral("?") : uplink));

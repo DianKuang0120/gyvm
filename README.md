@@ -96,7 +96,9 @@ Notifications (asynchronous, ordered workqueue):
 
 ## 网络
 
-勾选「网络」后，启动前 gyvm 会通过 daemon 自动完成：
+勾选「网络」后，启动前 gyvm 会自动完成下面这些步骤——**有 daemon 走 daemon，
+没有 daemon 走提权前缀**（设置 → 首选项，默认 `sudo -A` + ksshaskpass 图形密码框），
+两条路径执行的命令完全一致：
 
 ```bash
 ip tuntap add dev gyvm0 mode tap
@@ -138,7 +140,7 @@ ping -c2 192.168.77.1     # 通宿主
 ping -c2 223.5.5.5        # 通外网
 ```
 
-没有 daemon 时，按弹窗里给出的命令手工配一遍即可。
+两者都不通时（比如根本没有配置提权前缀），弹窗会把完整命令列出来，可以手工执行。
 
 > 早期版本因为 tap 未创建导致 crosvm 直接退出，现在启动前会检查并给出明确提示。
 

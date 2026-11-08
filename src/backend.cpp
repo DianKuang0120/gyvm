@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
 
 #include <unistd.h>
 
@@ -44,15 +45,107 @@ bool Backend::setShmemThp(const QString &mode)
     return rep.isValid() && rep.value();
 }
 
+// 把一条命令包装进提权前缀（sudo -A / pkexec）并执行。
+// 返回 {是否成功, 错误说明}
+QPair<bool, QString> Backend::runPrivileged(const QString &script)
+{
+    if (m_prefix.isEmpty())
+        return {false, QStringLiteral("没有配置提权前缀，无法执行需要 root 的操作")};
+
+    QProcess p;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    if (m_prefix.contains(QStringLiteral("sudo")) &&
+        QFile::exists(QStringLiteral("/usr/bin/ksshaskpass")))
+        env.insert(QStringLiteral("SUDO_ASKPASS"), QStringLiteral("/usr/bin/ksshaskpass"));
+    p.setProcessEnvironment(env);
+
+    QStringList full = m_prefix;
+    full << QStringLiteral("/bin/sh") << QStringLiteral("-c") << script;
+
+    p.start(full.first(), full.mid(1));
+    if (!p.waitForStarted(5000))
+        return {false, QStringLiteral("无法启动提权程序：%1").arg(p.errorString())};
+    if (!p.waitForFinished(60000)) {
+        p.kill();
+        return {false, QStringLiteral("提权命令超时")};
+    }
+    if (p.exitCode() != 0) {
+        const QString err = QString::fromLocal8Bit(p.readAllStandardError()).trimmed();
+        return {false, err.isEmpty() ? QStringLiteral("提权命令失败（退出码 %1）").arg(p.exitCode())
+                                     : err};
+    }
+    return {true, {}};
+}
+
 QString Backend::setupNetwork(const QString &tap, const QString &subnet, const QString &uplink)
 {
-    if (!m_daemon)
-        return QStringLiteral("需要特权 daemon（gyvmd）才能配置网络");
-    QDBusReply<QString> rep =
-        m_daemon->call(QStringLiteral("SetupNetwork"), tap, subnet, uplink);
-    if (!rep.isValid())
-        return rep.error().message();
-    return rep.value();
+    if (m_daemon) {
+        QDBusReply<QString> rep =
+            m_daemon->call(QStringLiteral("SetupNetwork"), tap, subnet, uplink);
+        if (!rep.isValid())
+            return rep.error().message();
+        return rep.value();
+    }
+
+    // 没有 daemon：退回到提权前缀（sudo -A + ksshaskpass / pkexec），
+    // 执行的命令和 daemon 里做的完全一致。
+    if (tap.isEmpty() ||
+        !QRegularExpression(QStringLiteral("^[a-zA-Z0-9_.-]{1,15}$")).match(tap).hasMatch())
+        return QStringLiteral("接口名不合法：%1").arg(tap);
+
+    const QStringList parts = subnet.split(QLatin1Char('/'));
+    if (parts.size() != 2)
+        return QStringLiteral("子网格式不对：%1").arg(subnet);
+    const QString addr = parts.at(0);
+    const int prefix = parts.at(1).toInt();
+    if (prefix < 16 || prefix > 29)
+        return QStringLiteral("前缀长度不合理：%1").arg(prefix);
+    const int slash = addr.lastIndexOf(QLatin1Char('.'));
+    if (slash < 0)
+        return QStringLiteral("子网地址不合法：%1").arg(subnet);
+    const QString gateway = addr.left(slash) + QStringLiteral(".1");
+
+    QString up = uplink;
+    if (up.isEmpty()) {
+        QProcess r;
+        r.start(QStringLiteral("ip"),
+                {QStringLiteral("-4"), QStringLiteral("route"), QStringLiteral("show"),
+                 QStringLiteral("default")});
+        if (r.waitForFinished(5000)) {
+            const QString out = QString::fromLocal8Bit(r.readAllStandardOutput());
+            for (const QString &line : out.split(QLatin1Char('\n'))) {
+                if (!line.startsWith(QLatin1String("default")))
+                    continue;
+                const QStringList f = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                const int i = f.indexOf(QStringLiteral("dev"));
+                if (i >= 0 && i + 1 < f.size()) {
+                    up = f.at(i + 1);
+                    break;
+                }
+            }
+        }
+    }
+    if (up.isEmpty())
+        return QStringLiteral("找不到默认路由所在的出口接口，无法配 NAT");
+
+    // 一次性脚本：建 tap、配地址、开转发、加 NAT。
+    // 幂等：tap 已存在就复用，NAT 规则先删再加。
+    const QString script =
+        QStringLiteral(
+            "set -e\n"
+            "ip link show dev %1 >/dev/null 2>&1 || ip tuntap add dev %1 mode tap\n"
+            "ip addr flush dev %1 2>/dev/null || true\n"
+            "ip addr add %2/%3 dev %1\n"
+            "ip link set dev %1 up\n"
+            "sysctl -qw net.ipv4.ip_forward=1\n"
+            "iptables -t nat -D POSTROUTING -s %4 -o %5 -j MASQUERADE 2>/dev/null || true\n"
+            "iptables -t nat -A POSTROUTING -s %4 -o %5 -j MASQUERADE\n")
+            .arg(tap, gateway)
+            .arg(prefix)
+            .arg(subnet, up);
+
+    const auto r = runPrivileged(script);
+    return r.first ? QString() : r.second;
 }
 
 void Backend::teardownNetwork(const QString &tap, const QString &subnet, const QString &uplink)

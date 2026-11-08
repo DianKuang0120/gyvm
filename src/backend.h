@@ -4,6 +4,7 @@
 #include "vmconfig.h"
 
 #include <QByteArray>
+#include <QPair>
 #include <QHash>
 #include <QObject>
 #include <QProcess>
@@ -62,6 +63,9 @@ public:
     QString setupNetwork(const QString &tap, const QString &subnet, const QString &uplink);
     void teardownNetwork(const QString &tap, const QString &subnet, const QString &uplink);
     QString defaultUplink() const;
+
+    // 用提权前缀执行一段 shell 脚本；返回 {成功, 错误说明}
+    QPair<bool, QString> runPrivileged(const QString &script);
 
     bool running(const QString &name) const;
     bool start(const VmConfig &vm, QString *err);
