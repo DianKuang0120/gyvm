@@ -119,6 +119,17 @@ DNS     223.5.5.5, 119.29.29.29
 > 注意网卡名：Ubuntu 的 predictable naming 会把 crosvm 的 eth0 改名成
 > `enp0s2` 之类的名字，所以 netplan 用 `match: name: "en*"` 而不是写死 `eth0`。
 
+### 快速连续启动会撞上 RM 的资源回收延迟
+
+实测同一配置间隔 2 秒连发三次：失败、失败、成功。间隔 12 秒则稳定成功。
+
+```
+RM rejected message 56000004. Error: 2    ← VM_START 被拒，2 = NORESOURCE
+```
+
+这是 Gunyah 资源管理器回收上一个 VM 的资源需要时间，**不是配置问题**。
+脚本里连续启停时，两次之间留 10 秒以上即可。
+
 进去后验证：
 
 ```bash
@@ -130,6 +141,22 @@ ping -c2 223.5.5.5        # 通外网
 没有 daemon 时，按弹窗里给出的命令手工配一遍即可。
 
 > 早期版本因为 tap 未创建导致 crosvm 直接退出，现在启动前会检查并给出明确提示。
+
+### 实测结果（Ubuntu 24.04，2 GiB / 2 vCPU）
+
+```
+root@ubuntu:~# ip -br a
+enp0s2   UP   192.168.77.2/24
+
+root@ubuntu:~# ping -c2 192.168.77.1
+2 packets transmitted, 2 received, 0% packet loss
+
+root@ubuntu:~# ping -c2 223.5.5.5
+2 packets transmitted, 2 received, 0% packet loss   ← NAT 生效
+
+root@ubuntu:~# curl -o /dev/null -w "%{http_code}" http://mirrors.ustc.edu.cn/...
+200
+```
 
 ## 用模板一键建 Ubuntu（推荐）
 
