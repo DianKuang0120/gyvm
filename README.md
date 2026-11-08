@@ -116,6 +116,9 @@ iptables -t nat -A POSTROUTING -s 192.168.77.0/24 -o <默认路由出口> -j MAS
 DNS     223.5.5.5, 119.29.29.29
 ```
 
+> 注意网卡名：Ubuntu 的 predictable naming 会把 crosvm 的 eth0 改名成
+> `enp0s2` 之类的名字，所以 netplan 用 `match: name: "en*"` 而不是写死 `eth0`。
+
 进去后验证：
 
 ```bash
