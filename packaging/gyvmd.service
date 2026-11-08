@@ -1,0 +1,17 @@
+[Unit]
+Description=gyvm privileged daemon (launches crosvm/Gunyah VMs)
+Documentation=https://example.invalid/gyvm
+After=dbus.service
+Requires=dbus.service
+
+[Service]
+Type=simple
+Environment=LANG=C.UTF-8
+ExecStart=/usr/local/bin/gyvmd
+# crosvm 路径（如需改动，取消注释并改成你的路径）
+#Environment=GYVM_CROSVM=/opt/crosvm/crosvm
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

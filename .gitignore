@@ -1,0 +1,22 @@
+# 构建产物
+build/
+*.o
+*.moc
+moc_*.cpp
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+.ninja_deps
+.ninja_log
+build.ninja
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# 运行时可能落到源码目录的东西
+*.log
+pstore.bin
