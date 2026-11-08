@@ -118,8 +118,24 @@ iptables -t nat -A POSTROUTING -s 192.168.77.0/24 -o <默认路由出口> -j MAS
 DNS     223.5.5.5, 119.29.29.29
 ```
 
-> 注意网卡名：Ubuntu 的 predictable naming 会把 crosvm 的 eth0 改名成
-> `enp0s2` 之类的名字，所以 netplan 用 `match: name: "en*"` 而不是写死 `eth0`。
+> **网卡名会变**：Ubuntu 的 predictable naming 会把 crosvm 的 eth0 改名成
+> `enp0s2`、`enp0s6` 之类的名字，而且**编号随 PCI 设备数变化**——加了 `--gpu`
+> 就会从 `enp0s2` 变成 `enp0s6`。只写 `match: name: "en*"` 不够可靠。
+>
+> 模板里用的是 `match` + `set-name`，强制改回 `eth0`：
+>
+> ```yaml
+> ethernets:
+>   gyvm-net:
+>     match:
+>       name: "en*"
+>     set-name: eth0
+>     dhcp4: no
+>     addresses: [192.168.77.2/24]
+>     routes: [{to: default, via: 192.168.77.1}]
+> ```
+>
+> 这样无论 crosvm 给网卡起什么名字，客户机里永远是 `eth0`。
 
 ### 快速连续启动会撞上 RM 的资源回收延迟
 
