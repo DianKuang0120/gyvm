@@ -201,23 +201,24 @@ cmake --build build
 0. **（推荐）先装守护进程** —— 见下方「守护进程」，之后启动 VM 不再弹密码框。
 1. **必须受保护 VM**：非受保护 VM 会让**主机 panic**，所以默认带
    `--protected-vm-without-firmware`（走 LEND + 内存隔离）。
-2. **大页**：crosvm 的 guest 内存是 memfd(shmem)。内核 shmem 大页不是 `always` 时，
-   内存超过约 1 GiB 就会失败。实测：
+2. **大页只作用于虚拟机进程**：crosvm 的 guest 内存是 memfd(shmem)，
+   `--hugepages` 会让它对自己的 memfd 发 `MADV_HUGEPAGE`。所以系统级
+   `shmem_enabled` 用默认的 `advise` 即可，**不需要也不建议改成 `always`**——
+   `advise` 只影响主动请求的进程，系统里其它 tmpfs 使用者不受影响。
 
-   | `shmem_enabled` | 1 GiB | 2 GiB |
+   | `shmem_enabled` | crosvm 带 `--hugepages` | 说明 |
    |---|---|---|
-   | `advise`（很多发行版默认） | ✅ | ❌ `RM rejected 56000004. Error: 2` |
-   | `always` | ✅ | ✅ |
+   | `advise`（默认） | ✅ 1G / 2G / 4G 均正常 | 推荐 |
+   | `never` / `deny` | ❌ | 连 `madvise` 也被拒 |
+   | `always` | ✅ | 但**所有** tmpfs 都会被强制大页，没必要 |
 
-   失败时 dmesg 只有一句 `RM rejected message 56000004. Error: 2`，
-   `2` 是 `GH_RM_ERROR_NORESOURCE`，**看起来像资源泄漏，其实是内存不合规**。
+   验证大页真的生效：
 
    ```bash
-   echo always | sudo tee /sys/kernel/mm/transparent_hugepage/shmem_enabled
+   grep ShmemHugePages /proc/meminfo   # VM 运行时应大于 0
    ```
 
-   注意：写 `always` 会显示成 `[always] within_size advise never deny force`，
-   说明生效的是 `always`。装上 daemon 后 gyvm 会自动设置。
+   用 `advise` 时，只有 crosvm 的 guest 内存会贡献这个数字，其它进程不受影响。
 3. **需要 root**：`/dev/gunyah` 目前 `root:root 0600`。有 daemon 就由它提权；
    否则用「设置 → 首选项」里的**提权前缀**（`sudo -A` + ksshaskpass 图形密码框）。
 

@@ -947,28 +947,29 @@ void MainWindow::onStart()
         }
     }
 
-    // 大页检查：客户机内存超过 1 GiB 时，shmem 大页必须是 always，
-    // 否则 RM 用 GH_RM_ERROR_NORESOURCE 拒绝 VM_START。
+    // 大页检查：客户机内存超过 1 GiB 时 shmem 大页模式不能是 never/deny。
+    // advise 就够——crosvm 的 --hugepages 会对自己的 memfd 发 MADV_HUGEPAGE，
+    // 大页只体现在 crosvm 的 guest 内存上，不影响系统里其它 tmpfs 使用者。
     if (vm.memoryMiB > 1024) {
         QFile f(QStringLiteral("/sys/kernel/mm/transparent_hugepage/shmem_enabled"));
         if (f.open(QIODevice::ReadOnly)) {
             const QString mode = QString::fromLatin1(f.read(64)).trimmed();
-            // 只有 always 能让 1 GiB 以上的客户机内存通过 RM 的检查；
-            // advise/never 时 RM 会回 GH_RM_ERROR_NORESOURCE，表面看像资源泄漏。
-            if (!mode.startsWith(QStringLiteral("[always]"))) {
+            const bool usable = mode.startsWith(QStringLiteral("[advise]")) ||
+                                mode.startsWith(QStringLiteral("[always]")) ||
+                                mode.startsWith(QStringLiteral("[within_size]"));
+            if (!usable) {
                 const auto r = QMessageBox::question(
-                    this, QStringLiteral("shmem 大页设置不适合大内存"),
+                    this, QStringLiteral("shmem 大页被禁用"),
                     QStringLiteral(
-                        "客户机内存 %1 MiB，但当前 shmem 大页模式是：\n"
+                        "客户机内存 %1 MiB，但 shmem 大页当前是：\n"
                         "  %2\n\n"
-                        "不是 always 时，资源管理器通常会用\n"
-                        "GH_RM_ERROR_NORESOURCE 拒绝 VM_START，\n"
-                        "表现为「加了磁盘/加大内存就起不来」。\n\n"
-                        "现在改成 always 吗？（需要授权）")
+                        "never/deny 时无法为大内存客户机建立 memfd，\n"
+                        "资源管理器会用 GH_RM_ERROR_NORESOURCE 拒绝 VM_START。\n\n"
+                        "改成 advise 吗？（只影响主动请求大页的进程，需要授权）")
                         .arg(vm.memoryMiB)
                         .arg(mode));
                 if (r == QMessageBox::Yes)
-                    m_backend.setShmemThp(QStringLiteral("always"));
+                    m_backend.setShmemThp(QStringLiteral("advise"));
             }
         }
     }
@@ -1468,7 +1469,8 @@ QString MainWindow::selfCheckText() const
     s += QStringLiteral("  匿名大页               : %1\n")
              .arg(read(QStringLiteral("/sys/kernel/mm/transparent_hugepage/enabled"),
                        QStringLiteral("(无此文件)")));
-    s += QStringLiteral("  （shmem 需 advise/always，否则内存 >1G 的 VM 会被 RM 拒绝）\n");
+    s += QStringLiteral("  （shmem 用 advise 即可：crosvm 的 --hugepages 会对自己的 memfd\n"
+                        "    发 MADV_HUGEPAGE，大页只落在 guest 内存上）\n");
 
     s += QStringLiteral("\n[提权]\n");
     s += QStringLiteral("  特权 daemon (gyvmd)    : %1\n")
