@@ -9,6 +9,7 @@
 class QAction;
 class QCheckBox;
 class QComboBox;
+class QCloseEvent;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -53,6 +54,9 @@ private slots:
     void onOpenLog();
     void onGunyahInfo();
 
+protected:
+    void closeEvent(QCloseEvent *e) override;
+
 private:
     void buildUi();
     void buildActions();
@@ -69,6 +73,10 @@ private:
     void checkShmem();
     // 把当前表单内容（含磁盘/共享目录列表）立即写回 vm.json
     void persistForm();
+
+    // 改动磁盘/共享目录前调用：VM 运行中时拒绝并说明原因。
+    // crosvm 已经打开着镜像文件，这时增删会让它继续写一个已经不该动的文件。
+    bool requireStopped(const QString &what);
     QString selfCheckText() const;
 
     Backend m_backend;
@@ -100,6 +108,7 @@ private:
     QLabel *m_status = nullptr;
     QLabel *m_statsLabel = nullptr;
     QLabel *m_memHint = nullptr;
+    QLabel *m_runningHint = nullptr;
     QTimer *m_statsTimer = nullptr;
 
     QAction *m_actStart = nullptr;

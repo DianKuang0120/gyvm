@@ -4,6 +4,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -81,6 +82,34 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 }
 
 // ---------------------------------------------------------------- 界面
+
+void MainWindow::closeEvent(QCloseEvent *e)
+{
+    // 关界面会把还开着的 VM 一起杀掉，先问一下；没在跑就直接关。
+    const QString running = [this]() {
+        for (const QString &n : Store::listNames())
+            if (m_backend.running(n))
+                return n;
+        return QString();
+    }();
+
+    if (running.isEmpty()) {
+        e->accept();
+        return;
+    }
+
+    const auto r = QMessageBox::question(
+        this, QStringLiteral("虚拟机还在运行"),
+        QStringLiteral("「%1」还在运行。\n\n"
+                       "关闭窗口会把它强制结束，客户机里没保存的东西会丢。\n"
+                       "建议先回窗口里正常关机。\n\n仍然关闭吗？")
+            .arg(running),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (r == QMessageBox::Yes)
+        e->accept();
+    else
+        e->ignore();
+}
 
 void MainWindow::buildUi()
 {
@@ -355,6 +384,13 @@ void MainWindow::buildUi()
 
     auto *configPage = new QWidget(this);
     auto *cv = new QVBoxLayout(configPage);
+    m_runningHint = new QLabel(this);
+    m_runningHint->setWordWrap(true);
+    m_runningHint->setStyleSheet(
+        QStringLiteral("background:#3a2f1a; color:#ffb74d; padding:6px; border-radius:4px;"));
+    m_runningHint->hide();
+    cv->addWidget(m_runningHint);
+
     cv->addLayout(form);
     cv->addWidget(devices);
     cv->addStretch(1);
@@ -832,6 +868,23 @@ void MainWindow::onNewVm()
     note(QStringLiteral("已创建「%1」").arg(vm.name));
 }
 
+bool MainWindow::requireStopped(const QString &what)
+{
+    const QString n = selectedName();
+    if (n.isEmpty())
+        return false;
+    if (!m_backend.running(n))
+        return true;
+
+    QMessageBox::warning(
+        this, QStringLiteral("虚拟机正在运行"),
+        QStringLiteral("「%1」正在运行，请先停止它再%2。\n\n"
+                       "crosvm 已经打开了镜像文件，运行中改动会让它继续写\n"
+                       "一个已经不该动的文件，可能损坏客户机数据。")
+            .arg(n, what));
+    return false;
+}
+
 void MainWindow::persistForm()
 {
     const QString n = selectedName();
@@ -1209,6 +1262,8 @@ void MainWindow::onBrowseInitrd()
 
 void MainWindow::onCreateDisk()
 {
+    if (!requireStopped(QStringLiteral("创建磁盘")))
+        return;
     const QString n = selectedName();
     const QString startDir = n.isEmpty() ? QDir::homePath() : Store::vmDir(n);
     const QString path = QFileDialog::getSaveFileName(
@@ -1256,6 +1311,8 @@ void MainWindow::onCreateDisk()
 
 void MainWindow::onAttachIso()
 {
+    if (!requireStopped(QStringLiteral("挂载 ISO")))
+        return;
     const QString p = QFileDialog::getOpenFileName(this, QStringLiteral("选择 ISO / 只读镜像"),
                                                    QDir::homePath(),
                                                    QStringLiteral("ISO (*.iso);;所有文件 (*)"));
@@ -1272,6 +1329,8 @@ void MainWindow::onAttachIso()
 
 void MainWindow::onAttachDisk()
 {
+    if (!requireStopped(QStringLiteral("添加磁盘")))
+        return;
     const QString n = selectedName();
     const QString p = QFileDialog::getOpenFileName(this, QStringLiteral("选择磁盘镜像"),
                                                    n.isEmpty() ? QDir::homePath()
@@ -1301,6 +1360,8 @@ void MainWindow::onAttachDisk()
 
 void MainWindow::onRemoveDisk()
 {
+    if (!requireStopped(QStringLiteral("移除磁盘")))
+        return;
     QListWidgetItem *it = m_disks->currentItem();
     if (!it)
         return;
@@ -1350,6 +1411,13 @@ void MainWindow::setRunningUi(bool running)
         m_actStop->setEnabled(running);
     if (m_actRestart)
         m_actRestart->setEnabled(true);
+
+    // 运行中改内存/CPU/命令行等不会立即生效，明确告诉用户
+    if (m_runningHint) {
+        m_runningHint->setVisible(running);
+        m_runningHint->setText(
+            QStringLiteral("虚拟机运行中：这里改的参数要停止后重启才生效"));
+    }
 }
 
 void MainWindow::note(const QString &msg, bool error)
@@ -1510,6 +1578,8 @@ void MainWindow::checkShmem()
 
 void MainWindow::onAddSharedDir()
 {
+    if (!requireStopped(QStringLiteral("添加共享目录")))
+        return;
     const QString dir = QFileDialog::getExistingDirectory(
         this, QStringLiteral("选择要共享给客户机的宿主目录"), QDir::homePath());
     if (dir.isEmpty())
@@ -1531,6 +1601,8 @@ void MainWindow::onAddSharedDir()
 
 void MainWindow::onRemoveSharedDir()
 {
+    if (!requireStopped(QStringLiteral("移除共享目录")))
+        return;
     QListWidgetItem *it = m_sharedDirs->currentItem();
     if (!it)
         return;
@@ -1541,6 +1613,8 @@ void MainWindow::onRemoveSharedDir()
 
 void MainWindow::onDiskResize()
 {
+    if (!requireStopped(QStringLiteral("调整磁盘大小")))
+        return;
     QListWidgetItem *it = m_disks->currentItem();
     if (!it) {
         note(QStringLiteral("先在列表里选一个磁盘"), true);
@@ -1574,6 +1648,8 @@ void MainWindow::onDiskResize()
 
 void MainWindow::onDiskClone()
 {
+    if (!requireStopped(QStringLiteral("克隆磁盘")))
+        return;
     QListWidgetItem *it = m_disks->currentItem();
     if (!it) {
         note(QStringLiteral("先在列表里选一个磁盘"), true);
