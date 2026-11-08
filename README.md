@@ -94,6 +94,77 @@ Notifications (asynchronous, ordered workqueue):
 点「刷新」重新读取。VM 卡住时不必再开终端敲命令。
 
 
+## 用模板一键建 Ubuntu（推荐）
+
+`~/Gunyah/images/<模板名>/` 下放三样东西就是一个模板：
+
+```
+ubuntu-2404/
+├── Image        未压缩的 arm64 内核（crosvm 不认压缩过的 vmlinuz）
+├── initrd.img   对应的 initramfs
+└── rootfs.qcow2 系统盘
+```
+
+菜单 **文件 → 从模板新建…**，选模板、填名字即可。系统盘会被**复制**一份到新 VM 目录，
+所以同一个模板可以开多台互不影响。
+
+### 现成的 Ubuntu 24.04 LTS 模板
+
+已经准备好放在 `~/Gunyah/images/ubuntu-2404/`：
+
+| 文件 | 来源 |
+|---|---|
+| `Image` | cloud image 里 `/boot/vmlinuz-6.8.0-147-generic` 解压后 |
+| `initrd.img` | cloud image 里 `/boot/initrd.img-6.8.0-147-generic` |
+| `rootfs.qcow2` | 中科大 `noble-server-cloudimg-arm64.img` |
+
+root 密码是 `114514`，串口（`ttyS0`）自动登录。
+
+### 手工从 cloud image 做一个模板
+
+```bash
+# 1. 下载（中科大镜像）
+cd ~/Gunyah/images
+curl -LO https://mirrors.ustc.edu.cn/ubuntu-cloud-images/noble/current/noble-server-cloudimg-arm64.img
+
+# 2. 转 raw 方便挂载
+qemu-img convert -O raw noble-server-cloudimg-arm64.img noble.raw
+
+# 3. 挂 /boot，取出内核和 initrd
+sudo mount -o loop,offset=$((206848*512)),sizelimit=$((1890305*512)) noble.raw /mnt
+sudo cp /mnt/vmlinuz-6.8.0-147-generic ~/Gunyah/images/ubuntu-2404/vmlinuz
+sudo cp /mnt/initrd.img-6.8.0-147-generic ~/Gunyah/images/ubuntu-2404/initrd.img
+sudo umount /mnt
+
+# 4. 解压内核——crosvm 只认未压缩的 arm64 Image
+gunzip -c vmlinuz > Image
+
+# 5. 设 root 密码（cloud image 默认锁定 root）
+sudo mount -o loop,offset=$((2099200*512)),sizelimit=$((5240799*512)) noble.raw /mnt
+HASH=$(openssl passwd -6 你的密码)
+sudo sed -i "s|^root:[^:]*:|root:$HASH:|" /mnt/etc/shadow
+
+# 6. 串口自动登录
+sudo mkdir -p /mnt/etc/systemd/system/serial-getty@ttyS0.service.d
+sudo tee /mnt/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,38400,9600 %I $TERM
+EOF
+sudo umount /mnt
+
+# 7. 内核命令行要用 UUID 指定 root
+sudo blkid -p -o export --offset $((2099200*512)) --size $((5240799*512)) noble.raw | grep UUID
+```
+
+启动参数里加：
+
+```
+root=UUID=<上一步的 UUID> rw panic=0 systemd.mask=systemd-networkd-wait-online.service
+```
+
+`systemd.mask` 是必须的——没有网卡时 Ubuntu 会卡在 `networkd-wait-online` 一分多钟。
+
 ## 用 UEFI + ISO 启动 Ubuntu（配方）
 
 > 目标：用 edk2（或 DroidVM 的 Gunyah 专用 UEFI）作为 payload，从 ISO 引导 arm64 发行版。
@@ -130,8 +201,23 @@ cmake --build build
 0. **（推荐）先装守护进程** —— 见下方「守护进程」，之后启动 VM 不再弹密码框。
 1. **必须受保护 VM**：非受保护 VM 会让**主机 panic**，所以默认带
    `--protected-vm-without-firmware`（走 LEND + 内存隔离）。
-2. **大页**：crosvm 的 guest 内存是 memfd(shmem)，内核 shmem 大页若为 `never`，
-   内存一大就会 RM `ARG_SIZE` 拒绝。装上 daemon 后 gyvm 会**自动打开**。
+2. **大页**：crosvm 的 guest 内存是 memfd(shmem)。内核 shmem 大页不是 `always` 时，
+   内存超过约 1 GiB 就会失败。实测：
+
+   | `shmem_enabled` | 1 GiB | 2 GiB |
+   |---|---|---|
+   | `advise`（很多发行版默认） | ✅ | ❌ `RM rejected 56000004. Error: 2` |
+   | `always` | ✅ | ✅ |
+
+   失败时 dmesg 只有一句 `RM rejected message 56000004. Error: 2`，
+   `2` 是 `GH_RM_ERROR_NORESOURCE`，**看起来像资源泄漏，其实是内存不合规**。
+
+   ```bash
+   echo always | sudo tee /sys/kernel/mm/transparent_hugepage/shmem_enabled
+   ```
+
+   注意：写 `always` 会显示成 `[always] within_size advise never deny force`，
+   说明生效的是 `always`。装上 daemon 后 gyvm 会自动设置。
 3. **需要 root**：`/dev/gunyah` 目前 `root:root 0600`。有 daemon 就由它提权；
    否则用「设置 → 首选项」里的**提权前缀**（`sudo -A` + ksshaskpass 图形密码框）。
 

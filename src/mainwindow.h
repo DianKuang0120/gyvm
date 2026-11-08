@@ -23,6 +23,7 @@ public:
 
 private slots:
     void onNewVm();
+    void onNewFromTemplate();
     void onSaveVm();
     void onDeleteVm();
     void onStart();

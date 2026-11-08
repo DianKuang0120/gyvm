@@ -24,6 +24,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QScreen>
 #include <QScrollArea>
@@ -278,6 +279,10 @@ void MainWindow::buildActions()
     auto *mNew = mFile->addAction(QIcon::fromTheme(QStringLiteral("document-new")),
                                   QStringLiteral("新建虚拟机"));
     connect(mNew, &QAction::triggered, this, &MainWindow::onNewVm);
+    auto *mTpl = mFile->addAction(QIcon::fromTheme(QStringLiteral("document-new-from-template")),
+                                  QStringLiteral("从模板新建…"));
+    mTpl->setToolTip(QStringLiteral("用 ~/Gunyah/images 里准备好的镜像快速建一台"));
+    connect(mTpl, &QAction::triggered, this, &MainWindow::onNewFromTemplate);
     auto *mSave = mFile->addAction(QIcon::fromTheme(QStringLiteral("document-save")),
                                    QStringLiteral("保存配置"));
     connect(mSave, &QAction::triggered, this, &MainWindow::onSaveVm);
@@ -516,6 +521,74 @@ void MainWindow::onSelectionChanged()
 }
 
 // ---------------------------------------------------------------- 动作
+
+void MainWindow::onNewFromTemplate()
+{
+    // 模板就放在 ~/Gunyah/images/<name>/ 下：Image + initrd.img + rootfs.qcow2
+    const QString tplRoot = QDir::homePath() + QStringLiteral("/Gunyah/images");
+    const QStringList tpls =
+        QDir(tplRoot).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)
+            .filter(QRegularExpression(QStringLiteral("^ubuntu|^debian|^alpine")));
+    if (tpls.isEmpty()) {
+        QMessageBox::information(
+            this, QStringLiteral("没有模板"),
+            QStringLiteral("在 %1 下没有找到模板目录。\n\n"
+                           "一个模板需要包含：\n"
+                           "  Image        未压缩的 arm64 内核\n"
+                           "  initrd.img   对应的 initramfs\n"
+                           "  rootfs.qcow2 系统盘（可选）")
+                .arg(tplRoot));
+        return;
+    }
+
+    bool ok = false;
+    const QString tpl = QInputDialog::getItem(this, QStringLiteral("从模板新建"),
+                                              QStringLiteral("模板："), tpls, 0, false, &ok);
+    if (!ok || tpl.isEmpty())
+        return;
+
+    const QString dir = tplRoot + QLatin1Char('/') + tpl;
+    const QString name = QInputDialog::getText(this, QStringLiteral("虚拟机名称"),
+                                               QStringLiteral("名称："), QLineEdit::Normal,
+                                               tpl, &ok)
+                             .trimmed();
+    if (!ok || name.isEmpty())
+        return;
+    if (Store::exists(name)) {
+        note(QStringLiteral("「%1」已存在").arg(name), true);
+        return;
+    }
+
+    VmConfig vm;
+    vm.name = name;
+    vm.kernel = dir + QStringLiteral("/Image");
+    vm.initrd = dir + QStringLiteral("/initrd.img");
+    vm.memoryMiB = 2048;
+    vm.cpus = 2;
+    vm.protectedVm = true;
+    vm.hugepages = true;
+
+    // 系统盘必须复制一份，否则所有模板实例会共写同一个镜像
+    const QString tplDisk = dir + QStringLiteral("/rootfs.qcow2");
+    if (QFile::exists(tplDisk)) {
+        QDir().mkpath(Store::vmDir(name));
+        const QString newDisk = Store::vmDir(name) + QStringLiteral("/rootfs.qcow2");
+        if (!QFile::copy(tplDisk, newDisk)) {
+            note(QStringLiteral("复制系统盘失败：%1").arg(newDisk), true);
+            return;
+        }
+        DiskAttach d;
+        d.path = newDisk;
+        vm.disks.append(d);
+    }
+
+    if (!Store::save(vm)) {
+        note(QStringLiteral("保存配置失败"), true);
+        return;
+    }
+    reloadList(name);
+    note(QStringLiteral("已从模板「%1」创建「%2」").arg(tpl, name));
+}
 
 void MainWindow::onNewVm()
 {
@@ -874,21 +947,28 @@ void MainWindow::onStart()
         }
     }
 
-    // 大页检查：内存 >1G 且开了 hugepages 时，shmem 大页若为 never 会被 RM 拒绝
-    if (vm.hugepages && vm.memoryMiB > 1024) {
+    // 大页检查：客户机内存超过 1 GiB 时，shmem 大页必须是 always，
+    // 否则 RM 用 GH_RM_ERROR_NORESOURCE 拒绝 VM_START。
+    if (vm.memoryMiB > 1024) {
         QFile f(QStringLiteral("/sys/kernel/mm/transparent_hugepage/shmem_enabled"));
         if (f.open(QIODevice::ReadOnly)) {
             const QString mode = QString::fromLatin1(f.read(64)).trimmed();
-            if (mode.startsWith(QStringLiteral("[never]"))) {
+            // 只有 always 能让 1 GiB 以上的客户机内存通过 RM 的检查；
+            // advise/never 时 RM 会回 GH_RM_ERROR_NORESOURCE，表面看像资源泄漏。
+            if (!mode.startsWith(QStringLiteral("[always]"))) {
                 const auto r = QMessageBox::question(
-                    this, QStringLiteral("大页未开启"),
+                    this, QStringLiteral("shmem 大页设置不适合大内存"),
                     QStringLiteral(
-                        "客户机内存 %1 MiB 且启用了 --hugepages，但系统的 shmem 大页是 never。\n"
-                        "这通常会让资源管理器拒绝请求。\n\n"
-                        "现在尝试改成 advise 吗？（需要授权）")
-                        .arg(vm.memoryMiB));
+                        "客户机内存 %1 MiB，但当前 shmem 大页模式是：\n"
+                        "  %2\n\n"
+                        "不是 always 时，资源管理器通常会用\n"
+                        "GH_RM_ERROR_NORESOURCE 拒绝 VM_START，\n"
+                        "表现为「加了磁盘/加大内存就起不来」。\n\n"
+                        "现在改成 always 吗？（需要授权）")
+                        .arg(vm.memoryMiB)
+                        .arg(mode));
                 if (r == QMessageBox::Yes)
-                    m_backend.setShmemThp(QStringLiteral("advise"));
+                    m_backend.setShmemThp(QStringLiteral("always"));
             }
         }
     }
